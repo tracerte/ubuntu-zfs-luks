@@ -35,9 +35,21 @@ NETWORK=enp0s3
 # $ cryptsetup luksRemoveKey /dev/sdax
 # $ cryptsetup -v luksClose luks1
 # $ wipefs -a /dev/sda[1-4]
-# $ sgdisk --zap-all sda
+# $ sgdisk --zap-all /dev/sda
 
-DISK=sda
+# To check partitions:
+# $ sgdisk -p /dev/sda
+
+# Choices include:
+# - ""
+# - mirror
+# - raidz 
+# - raidz2
+# - raidz3
+RAIDLEVEL=""
+
+DISKS=(sda)
+
 
 NETCFG=$(cat <<CFG
 network:
@@ -110,14 +122,16 @@ echo "Install ZFS and Disk Partitioning Tools"
 apt install --yes debootstrap gdisk zfs-initramfs
 systemctl stop zed
 
-DISKID=$(find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "${DISK}" | cut -d':' -f 1)
-if [ -z "${DISKID}" ]
-then
-  ee 1 "Could not lookup disk by id... are you sure '${DISK}' is correct?"
-fi
-DISKDEV="/dev/disk/by-id/${DISKID}"
+DISKIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "$d" | cut -d':' -f 1 ; done))
 
-echo "USING DISK: ${DISKDEV}"
+if [ "${#DISKIDS[@]}" -ne "${#DISKS[@]}" ]
+then
+  ee 1 "Could not lookup disks by id... are you sure they are correct? '${DISKS[*]}'"
+fi
+
+DISKDEVS=($(for d in "${DISKIDS[@]}"; do echo "/dev/disk/by-id/${d}" ; done))
+
+echo "USING DISK(s): ${DISKDEVS[*]}"
 echo "If this is wrong, press Ctrl^C within 15 seconds"
 sleep 5
 echo "10s"
@@ -125,40 +139,42 @@ sleep 5
 echo "5s"
 sleep 5
 
-echo "Destroying existing partitions"
-sgdisk --zap-all "${DISKDEV}"
-ee $? "Could not install partition table"
-sgdisk     -n1:1M:+512M   -c1:"EFI System Partition" -t1:EF00 "${DISKDEV}"
-ee $? "Could not create EFI partition"
-sgdisk     -n2:0:+"${SWAPSIZE}"G   -c2:"Swap" -t2:8200 "${DISKDEV}" # Single Disk
-ee $? "Could not create SWAP partition"
-sgdisk     -n3:0:+2G  -c3:"Boot Pool" -t3:BE00 "${DISKDEV}"
-ee $? "Could not create Boot Pool"
-sgdisk     -n4:0:0  -c4:"Root Pool" -t4:8309 "${DISKDEV}"
-ee $? "Could not create Root Pool"
+for d in  "${DISKDEVS[@]}"
+do
+    echo "Destroying existing partitions on ${d}"
+    sgdisk --zap-all "${d}"
+    ee $? "Could not install partition table on ${d} "
+    sgdisk     -n1:1M:+512M   -c1:"EFI System Partition" -t1:EF00 "${d}"
+    ee $? "Could not create EFI partition on ${d} "
+    sgdisk     -n2:0:+"${SWAPSIZE}"G   -c2:"Swap" -t2:FD00 "${d}"
+    ee $? "Could not create SWAP partition on ${d}"
+    sgdisk     -n3:0:+2G  -c3:"Boot Pool" -t3:BE00 "${d}"
+    ee $? "Could not create Boot Pool on ${d}"
+    sgdisk     -n4:0:0  -c4:"Root Pool" -t4:8309 "${d}"
+    ee $? "Could not create Root Pool on ${d}"
+done
 
-echo "Ensure Partitions are Correct"
-echo "If this is wrong, press Ctrl^C within 10 seconds"
-sgdisk -p /dev/sda
-sleep 10
+EFIS=($(for d in "${DISKIDS[@]}"; do echo "${d}-part1" ; done))
+EFIDEVS=($(for d in "${EFIS[@]}"; do echo "/dev/disk/by-id/${d}" ; done))
 
-EFI="${DISKID}-part1"
-EFIDEV=/dev/disk/by-id/$EFI
+SWAPS=($(for d in "${DISKIDS[@]}"; do echo "${d}-part2" ; done))
+SWAPDEVS=($(for d in "${SWAPS[@]}"; do echo "/dev/disk/by-id/${d}" ; done))
 
-SWAP="${DISKID}-part2"
-SWAPDEV=/dev/disk/by-id/$SWAP
+BPOOLS=($(for d in "${DISKIDS[@]}"; do echo "${d}-part3" ; done))
+BPOOLDEVS=($(for d in "${BPOOLS[@]}"; do echo "/dev/disk/by-id/${d}" ; done))
 
-BPOOL="${DISKID}-part3"
-BPOOLDEV=/dev/disk/by-id/$BPOOL
+RPOOLS=($(for d in "${DISKIDS[@]}"; do echo "${d}-part4" ; done))
+RPOOLDEVS=($(for d in "${RPOOLS[@]}"; do echo "/dev/disk/by-id/${d}" ; done))
 
-RPOOL="${DISKID}-part4"
-RPOOLDEV=/dev/disk/by-id/$RPOOL
+for d in  "${EFIDEVS[@]}"
+do
+    echo "Creating EFI FAT Partition on ${d}"
+    mkdosfs -F 32 -s 1 -n EFI "${d}"
+    ee $? "Error creating EFI FAT Partition"
+done
 
-echo "Creating EFI FAT Partition"
-mkdosfs -F 32 -s 1 -n EFI ${EFIDEV}
-ee $? "Error create EFI FAT Partition"
 
-EFIUUID=$(blkid -s UUID -o value "$EFIDEV")
+EFIUUIDS=($(for d in "${EFIDEVS[@]}"; do  blkid -s UUID -o value "$d" ; done))
 
 echo "Creating BootPool"
 
@@ -179,21 +195,26 @@ zpool create \
     -O acltype=posixacl -O canmount=off -O compression=lz4 \
     -O devices=off -O normalization=formD -O relatime=on -O xattr=sa \
     -O mountpoint=/boot -R /mnt \
-    bpool "${BPOOLDEV}"
+    bpool ${RAIDLEVEL} "${BPOOLDEVS[@]}"
 ee $? "Could not create zpool bpool"
 
-echo "Please ensure zpool created..."
-echo "If this is wrong, press Ctrl^C within 15 seconds"
-zfs list
-sleep 15
+for d in  "${RPOOLDEVS[@]}"
+do
+    echo "Setting up LUKS partition, please set a password for ${d}"
+    cryptsetup luksFormat -c aes-xts-plain64 -s 512 -h sha256 "${d}"
+    ee $? "Error setting up LUKS for ${d}"
+done
 
-echo "Setting up LUKS partition, please set a password"
-cryptsetup luksFormat -c aes-xts-plain64 -s 512 -h sha256 "${RPOOLDEV}"
-ee $? "Error setting up LUKS"
+LUKSS=($(for d in "${!DISKIDS[@]}"; do i=$((++d)); echo "luks${i}" ; done))
 
-echo "Please decrypt the LUKS partition"
-cryptsetup luksOpen "${RPOOLDEV}" luks1
-ee $? "Error decrypting RPOOL"
+for i in  "${!RPOOLDEVS[@]}"
+do
+    echo "Please decrypt the LUKS partition: ${LUKSS[i]}"
+    cryptsetup luksOpen "${RPOOLDEVS[i]}" "${LUKSS[i]}"
+    ee $? "Error decrypting ${LUKKS[i]}"
+done
+
+LUKSDEVS=($(for l in "${LUKSS[@]}"; do echo "/dev/mapper/${l}" ; done))
 
 echo "Creating RPOOL from LUKS"
 zpool create \
@@ -201,20 +222,16 @@ zpool create \
     -O acltype=posixacl -O canmount=off -O compression=lz4 \
     -O dnodesize=auto -O normalization=formD -O relatime=on \
     -O xattr=sa -O mountpoint=/ -R /mnt \
-    rpool /dev/mapper/luks1
+    rpool ${RAIDLEVEL} "${LUKSDEVS[@]}"
 ee $? "Error create RPOOL"
 
-echo "Please ensure zpool created..."
-echo "If this is wrong, press Ctrl^C within 10 seconds"
-zfs list
-sleep 10
 
-RPOOLUUID=$(blkid -s UUID -o value "$RPOOLDEV")
+RPOOLUUIDS=($(for d in "${RPOOLDEVS[@]}"; do  blkid -s UUID -o value "$d" ; done))
 
 echo "Please check that the UUID Environment Variables have populated. Continuing in 10 seconds"
 
-echo "EFIUUID = ${EFIUUID}"
-echo "RPOOLUUID = ${RPOOLUUID}"
+echo "EFIUUIDS = ${EFIUUIDS[*]}"
+echo "RPOOLUUIDS = ${RPOOLUUIDS[*]}"
 sleep 10
 
 echo "Installing and mounting dataset containers for Root and Boot filesystems"
@@ -299,10 +316,15 @@ echo "If not Ctrl^C in 10 seconds"
 cat /mnt/etc/apt/sources.list
 sleep 10
 
-echo "Setting Up /mnt/etc/crypttab"
-echo luks1 UUID="${RPOOLUUID}" none \
-    luks,discard,initramfs > /mnt/etc/crypttab
-echo swap "${SWAPDEV}" /dev/urandom \
+echo "Setting Up /mnt/etc/crypttab for LUKS devices"
+for i in  "${!RPOOLUUIDS[@]}"
+do
+    echo "${LUKSS[i]}" UUID="${RPOOLUUIDS[i]}" none \
+            luks,discard,initramfs >> /mnt/etc/crypttab
+done
+
+echo "Setting Up /mnt/etc/crypttab for SWAP devices"
+echo swap /dev/md0 /dev/urandom \
       swap,cipher=aes-xts-plain64:sha256,size=512 >> /mnt/etc/crypttab
 
 echo "Does this look correct?"
@@ -310,10 +332,19 @@ echo "If not Ctrl^C in 10 seconds"
 cat /mnt/etc/crypttab
 sleep 10
 
-echo "Setting Up /mnt/etc/fstab"
-echo UUID="${EFIUUID}" \
-    /boot/efi vfat umask=0022,fmask=0022,dmask=0022 0 1 >> /mnt/etc/fstab
+echo "Setting Up /mnt/etc/fstab for EFI devices"
+EFIMOUNTS=($(for d in "${!DISKIDS[@]}"; do i=$((++d)); echo "efi${i}" ; done))
+EFIMOUNTS[0]="efi"
+
+for i in  "${!EFIUUIDS[@]}"
+do
+    echo UUID="${EFIUUIDS[i]}" \
+            /boot/"${EFIMOUNTS[i]}" vfat umask=0022,fmask=0022,dmask=0022 0 1 >> /mnt/etc/fstab
+done
+
+echo "Setting Up /mnt/etc/fstab for Swap devices"
 echo /dev/mapper/swap none swap defaults 0 0 >> /mnt/etc/fstab
+
 echo "Does this look correct?"
 echo "If not Ctrl^C in 10 seconds"
 cat /mnt/etc/fstab
@@ -326,13 +357,38 @@ mount --rbind /sys  /mnt/sys
 
 cat <<"EOF" >> /mnt/chroot_install.sh
 #! /bin/bash
+SWAPDEVS=($(echo "$SWAPDEVS_S" | tr ' ' '\n'))
+EFIMOUNTS=($(echo "$EFIMOUNTS_S" | tr ' ' '\n'))
+ee(){
+  if [ "$1" -ne 0 ]
+  then
+    echo "[ERROR] ${2}"
+    exit "$1"
+  fi
+}
 apt update
 dpkg-reconfigure locales
 dpkg-reconfigure tzdata
-apt install --yes vim cryptsetup dosfstools
+apt install --yes vim cryptsetup dosfstools mdadm
+echo "Setting Up RAID for SWAP"
+if [ "${#SWAPDEVS[@]}" -eq 1 ]
+then
+    mdadm --create /dev/md0 --metadata=1.2 --level=mirror \
+        --raid-devices=2 "${SWAPDEVS[0]}" missing
+else
+    mdadm --create /dev/md0 --metadata=1.2 --level=mirror \
+        --raid-devices="${#SWAPDEVS[@]}" "${SWAPDEVS[@]}"
+fi
+ee $? "Error encounted setting up SWAP devices RAID"
 
-mkdir /boot/efi
-mount /boot/efi
+
+for e in "${EFIMOUNTS[@]}"
+do
+    mkdir /boot/"${e}"
+    mount /boot/"${e}"
+done
+ee $? "Error encounted during EFI mounting"
+
 apt install --yes \
     grub-efi-amd64 grub-efi-amd64-signed linux-image-generic \
     shim-signed zfs-initramfs zsys
@@ -357,8 +413,26 @@ echo "Setting Up Grub"
 rm -f /etc/default/grub
 echo "$GRUBCFG" > /etc/default/grub
 update-grub
+
 grub-install --target=x86_64-efi --efi-directory=/boot/efi \
     --bootloader-id=ubuntu --recheck --no-floppy
+ee $? "Error encounted on GRUB installation on first device"
+
+if [ "${#EFIMOUNTS[@]}" -gt 1 ]
+then 
+    for e in "${EFIMOUNTS[@]:1}"
+    do
+        cp -a /boot/efi/EFI /boot/"${e}"
+        grub-install --target=x86_64-efi --efi-directory=/boot/"${e}" \
+            --bootloader-id=ubuntu-"${e: -1}" --recheck --no-floppy
+    done
+fi
+ee $? "Error encounted on GRUB installation on remaining devices"
+
+
+echo "Disable grub-initrd-fallback.service"
+systemctl mask grub-initrd-fallback.service
+
 mkdir /etc/zfs/zfs-list.cache
 touch /etc/zfs/zfs-list.cache/bpool
 touch /etc/zfs/zfs-list.cache/rpool
@@ -366,9 +440,6 @@ ln -s /usr/lib/zfs-linux/zed.d/history_event-zfs-list-cacher.sh /etc/zfs/zed.d
 zed -F &
 pid=$!
 echo "Sleeping for 10 seconds to give time to populate zpool cache files"
-sleep 10
-echo "Cache files should be populated. Please see below for output. Cancel with CTRL^C in 10 seconds. Otherwise Killing zed and continuing install"
-cat /etc/zfs/zfs-list.cache/bpool /etc/zfs/zfs-list.cache/rpool
 sleep 10
 kill -9 $pid
 echo "Fixing zfs mount points"
@@ -382,6 +453,8 @@ EOF
 chmod +x /mnt/chroot_install.sh
 echo "Running /mnt/chroot_install.sh"
 chroot /mnt /usr/bin/env GRUBCFG="$GRUBCFG" \
+                         SWAPDEVS_S="${SWAPDEVS[*]}" \
+                         EFIMOUNTS_S="${EFIMOUNTS[*]}" \
                          bash -c "./chroot_install.sh"
 ee $? "Error encountered during execution of chroot_install.sh"
 
@@ -391,9 +464,3 @@ mount | grep -v zfs | tac | awk '/\/mnt/ {print $3}' | \
 zpool export -a
 
 echo "DONE. Please reboot"
-
-
-
-
-
-

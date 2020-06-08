@@ -1,6 +1,11 @@
 #! /bin/bash
 
 DISKS=(sda)
+# Choices Include:
+# - ata
+# - scsi
+# - wwn
+DISKIDTYPE="ata"
 LUKSHEADERDIR=/root/luks_headers
 GRUBCFG=$(cat <<CFG
 # If you change this file, run 'update-grub' afterwards to update
@@ -67,7 +72,7 @@ mkdir -p "${LUKSHEADERDIR}"
 # Get part 4's 
 #  grep ".{1,}-part4"
 
-RPOOLIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "${d}4" | cut -d':' -f 1 ; done))
+RPOOLIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "${d}4" | cut -d':' -f 1  |  grep -E "$DISKIDTYPE.+"; done))
 
 if [ "${#RPOOLIDS[@]}" -ne "${#DISKS[@]}" ]
 then

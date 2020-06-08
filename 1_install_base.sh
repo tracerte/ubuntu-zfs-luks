@@ -49,6 +49,11 @@ NETWORK=enp0s3
 RAIDLEVEL=""
 
 DISKS=(sda)
+# Choices Include:
+# - ata
+# - scsi
+# - wwn
+DISKIDTYPE="ata"
 
 
 NETCFG=$(cat <<CFG
@@ -122,7 +127,7 @@ echo "Install ZFS and Disk Partitioning Tools"
 apt install --yes debootstrap gdisk zfs-initramfs
 systemctl stop zed
 
-DISKIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "$d" | cut -d':' -f 1 ; done))
+DISKIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "$d" | cut -d':' -f 1 |  grep -E "$DISKIDTYPE.+"; done))
 
 if [ "${#DISKIDS[@]}" -ne "${#DISKS[@]}" ]
 then

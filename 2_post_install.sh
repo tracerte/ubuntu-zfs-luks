@@ -44,8 +44,8 @@ CFG
 if [ $# -ne 1 ]
 then
   echo "Usage: $0 <system_type>"
-  echo "Where <system_type> is 'server' or 'desktop'"
-  echo "Example: $0 server"
+  echo "Where <system_type> is 'terminal' or 'desktop'"
+  echo "Example: $0 terminal"
   exit 1
 fi
 
@@ -86,10 +86,10 @@ then
 
   rm -f /etc/netplan/01-netcfg.yaml
   echo "$NETMGRCFG" > /etc/netplan/01-network-manager-all.yaml
-elif [ "${SYSTEMTYPE}" == "server" ]
+elif [ "${SYSTEMTYPE}" == "terminal" ]
 then
-  echo "Installing Server environment"
-  apt install --yes ubuntu-standard ubuntu-server
+  echo "Installing Terminal environment"
+  apt install --yes ubuntu-standard
 else
   echo "Error: The system type specified is not valid. Are you sure about ${SYSTEMTYPE}?"
 fi

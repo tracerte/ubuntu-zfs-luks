@@ -67,7 +67,7 @@ mkdir -p "${LUKSHEADERDIR}"
 # Get part 4's 
 #  grep ".{1,}-part4"
 
-RPOOLIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "${d}4" | cut -d':' -f 1 |  grep -E "ata.+"; done))
+RPOOLIDS=($(for d in "${DISKS[@]}"; do find /dev/disk/by-id -type l -printf "%f:%l\n" | grep -E "${d}4" | cut -d':' -f 1 ; done))
 
 if [ "${#RPOOLIDS[@]}" -ne "${#DISKS[@]}" ]
 then

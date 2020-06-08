@@ -228,12 +228,6 @@ ee $? "Error create RPOOL"
 
 RPOOLUUIDS=($(for d in "${RPOOLDEVS[@]}"; do  blkid -s UUID -o value "$d" ; done))
 
-echo "Please check that the UUID Environment Variables have populated. Continuing in 10 seconds"
-
-echo "EFIUUIDS = ${EFIUUIDS[*]}"
-echo "RPOOLUUIDS = ${RPOOLUUIDS[*]}"
-sleep 10
-
 echo "Installing and mounting dataset containers for Root and Boot filesystems"
 zfs create -o canmount=off -o mountpoint=none rpool/ROOT
 zfs create -o canmount=off -o mountpoint=none bpool/BOOT
@@ -285,11 +279,6 @@ zfs create -o com.ubuntu.zsys:bootfs=no \
     rpool/ROOT/ubuntu_"$DISKUUID"/tmp
 chmod 1777 /mnt/tmp
 
-echo "Please ensure zpool partitions created and mounted..."
-echo "If this is wrong, press Ctrl^C within 15 seconds"
-zfs list
-sleep 15
-
 echo "Bootstrapping System"
 
 debootstrap focal /mnt
@@ -303,18 +292,10 @@ echo "127.0.1.1 ${HOSTNAME}" >> /mnt/etc/hosts
 echo "Setting Up Network"
 rm -f /mnt/etc/netplan/01-netcfg.yaml
 echo "$NETCFG" > /mnt/etc/netplan/01-netcfg.yaml
-echo "Does this look correct?"
-echo "If not Ctrl^C in 10 seconds"
-cat /mnt/etc/netplan/01-netcfg.yaml
-sleep 10
 
 echo "Setting up Apt Sources"
 rm -f /mnt/etc/apt/sources.list
 echo "$APTSRCS" > /mnt/etc/apt/sources.list
-echo "Does this look correct?"
-echo "If not Ctrl^C in 10 seconds"
-cat /mnt/etc/apt/sources.list
-sleep 10
 
 echo "Setting Up /mnt/etc/crypttab for LUKS devices"
 for i in  "${!RPOOLUUIDS[@]}"
@@ -326,11 +307,6 @@ done
 echo "Setting Up /mnt/etc/crypttab for SWAP devices"
 echo swap /dev/md0 /dev/urandom \
       swap,cipher=aes-xts-plain64:sha256,size=512 >> /mnt/etc/crypttab
-
-echo "Does this look correct?"
-echo "If not Ctrl^C in 10 seconds"
-cat /mnt/etc/crypttab
-sleep 10
 
 echo "Setting Up /mnt/etc/fstab for EFI devices"
 EFIMOUNTS=($(for d in "${!DISKIDS[@]}"; do i=$((++d)); echo "efi${i}" ; done))
@@ -344,11 +320,6 @@ done
 
 echo "Setting Up /mnt/etc/fstab for Swap devices"
 echo /dev/mapper/swap none swap defaults 0 0 >> /mnt/etc/fstab
-
-echo "Does this look correct?"
-echo "If not Ctrl^C in 10 seconds"
-cat /mnt/etc/fstab
-sleep 10
 
 echo "Binding Virtual Filesystem from LiveCD to new system"
 mount --rbind /dev  /mnt/dev
@@ -404,9 +375,7 @@ sudo apt install --yes curl patch
 curl https://launchpadlibrarian.net/478315221/2150-fix-systemd-dependency-loops.patch | \
     sed "s|/etc|/lib|;s|\.in$||" | (cd / ; patch -p1)
 echo "Grub Probing ZFS"
-echo "Does this look correct? Moving on in 5 seconds"
 grub-probe /boot
-sleep 5
 echo "Refresh initrd files"
 update-initramfs -c -k all
 echo "Setting Up Grub"
@@ -446,7 +415,7 @@ echo "Fixing zfs mount points"
 sed -Ei "s|/mnt/?|/|" /etc/zfs/zfs-list.cache/*
 echo "Install ssh server"
 apt install --yes openssh-server
-echo "Configuring ssh server to allow Root login. PLEASE TURN THIS OFF AFTER INSTALLATION"
+echo "Configuring ssh server to allow Root login"
 sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 EOF
 
@@ -464,3 +433,4 @@ mount | grep -v zfs | tac | awk '/\/mnt/ {print $3}' | \
 zpool export -a
 
 echo "DONE. Please reboot"
+echo "Please proceed to the second phase of system installation after rebooting."

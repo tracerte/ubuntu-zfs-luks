@@ -157,6 +157,8 @@ do
     ee $? "Could not create Boot Pool on ${d}"
     sgdisk     -n4:0:0  -c4:"Root Pool" -t4:8309 "${d}"
     ee $? "Could not create Root Pool on ${d}"
+    partprobe "${d}"
+    ee $? "Could not inform OS about partition table updates for ${d}"
 done
 
 EFIS=($(for d in "${DISKIDS[@]}"; do echo "${d}-part1" ; done))

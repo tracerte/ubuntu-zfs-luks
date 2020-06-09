@@ -33,7 +33,8 @@ Choices include:
  - raidz 
  - raidz2
  - raidz3
-RAIDLEVEL=""
+
+`RAIDLEVEL=""`
 
 Disks:
 
